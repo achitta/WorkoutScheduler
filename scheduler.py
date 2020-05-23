@@ -40,7 +40,7 @@ def get_calendar_ids(service: object) -> list:
     while True:
         # Make API call 
         calendar_list = service.calendarList().list(pageToken=page_token).execute()
-        print(calendar_list)
+        # print(calendar_list)
         # For each entry returned by API call, append the id to the 'calendar_ids'
         # if that calendar was included by user
         for calendar_list_entry in calendar_list['items']:
@@ -169,11 +169,11 @@ def apply_constraints(events: dict, other_constraints: list = []) -> dict:
             if not flag:
                 events[date].append(temp)
     
-    print(events)
-    print()
+    # print(events)
+    # print()
     events = merge_function(events)
-    print(events)
-    print()
+    # print(events)
+    # print()
     return events
 
 def merge_function(events):
@@ -195,7 +195,16 @@ def merge_function(events):
             i+=1 
     return result
 
-def find_free_time(events: dict, exerciseLength : int = 90) -> dict:
+def get_min_exercise_length(exercises : dict) -> int:
+    res = 100000000
+    for _, v in exercises.items():
+        res = min(res, v['length'])
+    return res
+
+def find_free_time(events: dict, workoutPlan: dict) -> dict:
+    exerciseLength = get_min_exercise_length(workoutPlan)
+    if exerciseLength == 100000000:
+        return {}
     result = {}
     for date, ev_list in events.items():
         if date not in result:
@@ -207,13 +216,10 @@ def find_free_time(events: dict, exerciseLength : int = 90) -> dict:
                 obj = {'start': ev_list[i]['end'], 'end': ev_list[i+1]['start'], 'date': date}
                 result[date].append(obj)
             i += 1
-    # print()
-    # print(result)
-    # print()
     return result
 
 def get_finalized_times(first_day: datetime.date, freeTimes : dict, workoutPlan : dict, 
-                        flexible : bool = True, exLength : int = 90) -> dict :
+                        flexible : bool = True) -> dict :
     on_days = {}
     off_days = {}
     for i in range(7):
@@ -226,19 +232,30 @@ def get_finalized_times(first_day: datetime.date, freeTimes : dict, workoutPlan 
     missed = []
     for day_offset in workoutPlan:
         date = (first_day  + datetime.timedelta(days=day_offset)).isoformat()
-        if len(freeTimes[date]) > 0:
+        flag = False
+        # if len(freeTimes[date]) > 0:
             # result[date] = freeTimes[date][0]
-            result[date] = {'time': {'start': freeTimes[date][0]['start'], 
-                                    'end': freeTimes[date][0]['start'] + exLength}, 'summary': workoutPlan[day_offset]}
-        else:
+        for i, item in enumerate(freeTimes[date]):
+            if item['end'] - item['start'] > workoutPlan[day_offset]['length']:
+                result[date] = {'time': {'start': freeTimes[date][i]['start'],
+                                        'end': freeTimes[date][i]['start'] + workoutPlan[day_offset]['length']},
+                                'summary': workoutPlan[day_offset]['summary']}
+                flag = True
+                break
+            # result[date] = {'time': {'start': freeTimes[date][0]['start'], 
+            #                         'end': freeTimes[date][0]['start'] + exLength}, 'summary': workoutPlan[day_offset]}
+        if not flag:
             missed.append(day_offset)
     if flexible:
         for day_offset in missed:
             if len(off_days) > 0:
                 date = (first_day  + datetime.timedelta(days=list(off_days.keys())[0])).isoformat()
 
-                if len(freeTimes[date]) > 0:
-                    result[date] = {'time': freeTimes[date][0], 'summary': workoutPlan[day_offset]}
+                for i, item in enumerate(freeTimes[date]):
+                    if item['end'] - item['start'] > workoutPlan[day_offset]['length']:
+                        result[date] = {'time': {'start': freeTimes[date][i]['start'],
+                                                'end': freeTimes[date][i]['start'] + workoutPlan[day_offset]['length']},
+                                        'summary': workoutPlan[day_offset]['summary']}
 
                 off_days.pop(list(off_days.keys())[0])
     # print(result)
@@ -246,7 +263,7 @@ def get_finalized_times(first_day: datetime.date, freeTimes : dict, workoutPlan 
 
 def schedule(service, finalized_times, attendees = []):
     for date in finalized_times:
-        start_utc, end_utc = eastern_to_utc(finalized_times[date]['time']['start'], finalized_times[date]['time']['end'], date)
+        start_utc, end_utc = tz_to_utc(finalized_times[date]['time']['start'], finalized_times[date]['time']['end'], date)
         event = {
             'summary': finalized_times[date]['summary'],
             'location': 'Gym',
@@ -268,14 +285,15 @@ def schedule(service, finalized_times, attendees = []):
         }
         event = service.events().insert(calendarId='primary', body=event).execute()
 
-def eastern_to_utc(start, end, date) -> object :
+def tz_to_utc(start, end, date) -> object :
     date = datetime.datetime.fromisoformat(date)
     start_hour = start // 60
     start_minute = start % 60
     end_hour = end // 60
     end_minute = end % 60
-    start_dt = (datetime.datetime(date.year, date.month, date.day, start_hour, start_minute) + datetime.timedelta(seconds=14400)).isoformat() + 'Z'
-    end_dt = (datetime.datetime(date.year, date.month, date.day, end_hour, end_minute) + datetime.timedelta(seconds=14400)).isoformat() + 'Z'
+    seconds_offset = get_timezone_hour_offset() * 3600
+    start_dt = (datetime.datetime(date.year, date.month, date.day, start_hour, start_minute) + datetime.timedelta(seconds=seconds_offset)).isoformat() + 'Z'
+    end_dt = (datetime.datetime(date.year, date.month, date.day, end_hour, end_minute) + datetime.timedelta(seconds=seconds_offset)).isoformat() + 'Z'
     # print(start_dt)
     # print(end_dt)
     return start_dt, end_dt
@@ -296,7 +314,7 @@ def get_user_calendars():
 def get_user_constraints():
     before = input('What is the earliest you are willing to work out? (Military Time): ')
     after = input('What is the latest you are willing to work out? (Military Time): ')
-    print(before, after)
+    # print(before, after)
     result = []
     before = before.split(':')
     after = after.split(':')
@@ -335,31 +353,53 @@ def get_user_workout_plan():
     result = {}
     monday = input('What do you work out on Monday? If off day, enter OFF: ')
     if monday != 'OFF':
-        result[0] = monday.strip()
+        result[0] = {}
+        result[0]['summary'] = monday.strip()
+        length = input('How long does that workout take in minutes? ')
+        result[0]['length'] = int(length)
+
     
     tuesday = input('What do you work out on Tuesday? If off day, enter OFF: ')
     if tuesday != 'OFF':
-        result[1] = tuesday.strip()
+        result[1] = {}
+        result[1]['summary'] = tuesday.strip()
+        length = input('How long does that workout take in minutes? ')
+        result[1]['length'] = int(length)
 
     wednesday = input('What do you work out on Wednesday? If off day, enter OFF: ')
     if wednesday != 'OFF':
-        result[2] = wednesday.strip()
+        result[2] = {}
+        result[2]['summary'] = wednesday.strip()
+        length = input('How long does that workout take in minutes? ')
+        result[2]['length'] = int(length)
 
     thursday = input('What do you work out on Thursday? If off day, enter OFF: ')
     if thursday != 'OFF':
-        result[3] = thursday.strip()
+        result[3] = {}
+        result[3]['summary'] = thursday.strip()
+        length = input('How long does that workout take in minutes? ')
+        result[3]['length'] = int(length)
 
     friday = input('What do you work out on Friday? If off day, enter OFF: ')
     if friday != 'OFF':
-        result[4] = friday.strip()
+        result[4] = {}
+        result[4]['summary'] = friday.strip()
+        length = input('How long does that workout take in minutes? ')
+        result[4]['length'] = int(length)
 
     saturday = input('What do you work out on Saturday? If off day, enter OFF: ')
     if saturday != 'OFF':
-        result[5] = saturday.strip()
+        result[5] = {}
+        result[5]['summary'] = saturday.strip()
+        length = input('How long does that workout take in minutes? ')
+        result[5]['length'] = int(length)
 
     sunday = input('What do you work out on Sunday? If off day, enter OFF: ')
     if sunday != 'OFF':
-        result[6] = sunday.strip()
+        result[6] = {}
+        result[6]['summary'] = sunday.strip()
+        length = input('How long does that workout take in minutes? ')
+        result[6]['length'] = int(length)
     
     # print(result)
     return result
@@ -370,16 +410,14 @@ def get_user_information() -> dict:
     # print()
     result['constraints'] = get_user_constraints()
     print()
-    result['exerciseLength'] = get_user_exercise_length()
-    print()
     result['workoutPlan'] = get_user_workout_plan()
     print()
     result['flexible'] = get_user_flexibility()
     print()
     result['attendees'] = get_user_attendees()
     print()
-    print("Scheduling...")
-    print()
+    # print("Scheduling...")
+    # print()
     return result
 
 
@@ -392,33 +430,33 @@ def main():
     print()
 
     info = get_user_information()
-    print(info)
+    # print(info)
     service = build('calendar', 'v3', credentials=creds)
-    print("reached 1")
+    # print("reached 1")
 
     all_events, next_monday = get_weekly_event_list(service)
-    print(all_events)
-    print(next_monday)
-    print("reached 2")
+    # print(all_events)
+    # print(next_monday)
+    # print("reached 2")
 
     events_sorted = sort_events_by_day(next_monday, all_events)
-    print(events_sorted)
-    print("reached 3")
+    # print(events_sorted)
+    # print("reached 3")
 
     events_more = apply_constraints(events_sorted, info['constraints'])
-    print(events_more)
-    print("reached 4")
+    # print(events_more)
+    # print("reached 4")
 
-    free_times = find_free_time(events_more, info['exerciseLength'])
-    print(free_times)
-    print("reached 5")
+    free_times = find_free_time(events_more, info['workoutPlan'])
+    # print(free_times)
+    # print("reached 5")
 
-    final_times = get_finalized_times(next_monday, free_times, info['workoutPlan'], info['flexible'], info['exerciseLength'])
-    print(final_times)
-    print("reached 6")
+    final_times = get_finalized_times(next_monday, free_times, info['workoutPlan'], info['flexible'])
+    # print(final_times)
+    # print("reached 6")
     
     schedule(service, final_times, info['attendees'])
-
+    print()
     print('Done!')
 
     # all_events = [{'start': 1080, 'end': 1140, 'date': '2020-05-26'}, {'start': 630, 'end': 1080, 'date': '2020-05-27'}, {'start': 660, 'end': 1170, 'date': '2020-05-25'}, {'start': 630, 'end': 960, 'date': '2020-05-26'}, {'start': 540, 'end': 600, 'date': '2020-05-27'}, {'start': 600, 'end': 840, 'date': '2020-05-28'}, {'start': 915, 'end': 975, 'date': '2020-05-28'}, {'start': 1020, 'end': 1200, 'date': '2020-05-28'}, {'start': 1380, 'end': 1410, 'date': '2020-05-28'}, {'start': 600, 'end': 660, 'date': '2020-05-29'}, {'start': 900, 'end': 1320, 'date': '2020-05-29'}]
